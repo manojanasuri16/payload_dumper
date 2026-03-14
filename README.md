@@ -1,18 +1,92 @@
-## payload dumper
-used to extract image files from payload.bin file [ota firmware]
+# payload_dumper
 
-Prerequisites: python3
+Extract partition images (`.img`) from Android OTA `payload.bin` files.
 
-Steps:
+Supports full OTA payloads with `REPLACE`, `REPLACE_BZ` (bzip2), `REPLACE_XZ` (LZMA/XZ), `ZERO`, and `DISCARD` operations.
 
-1. Download payload_dumper from this link [payload_dumper](https://github.com/manojanasuri16/payload_dumper/archive/refs/heads/main.zip), extract zip file and change current directory to the repository directory
+## Prerequisites
 
-        cd payload_dumper
+- Python 3.8+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
-2. Extract firmware zip file and copy payload.bin into payload_dumper folder
+## Installation
 
-3. run
+### Using uv (recommended)
 
-        python payload_dumper.py payload.bin
+```bash
+git clone https://github.com/manojanasuri16/payload_dumper.git
+cd payload_dumper
+uv sync
+```
 
-    all image files will be extracted into the current directory
+### Using pip
+
+```bash
+git clone https://github.com/manojanasuri16/payload_dumper.git
+cd payload_dumper
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Extract all partitions
+
+```bash
+# With uv
+uv run python payload_dumper.py payload.bin
+
+# With pip
+python payload_dumper.py payload.bin
+```
+
+Extracted `.img` files will be saved to the `output/` directory.
+
+### Extract specific partitions
+
+```bash
+uv run python payload_dumper.py payload.bin -p boot system vendor
+```
+
+### Custom output directory
+
+```bash
+uv run python payload_dumper.py payload.bin -o extracted/
+```
+
+### List partitions without extracting
+
+```bash
+uv run python payload_dumper.py payload.bin -l
+```
+
+## Options
+
+| Flag | Description |
+|---|---|
+| `-o`, `--output` | Output directory (default: `./output`) |
+| `-p`, `--partitions` | Extract only specified partitions |
+| `-l`, `--list` | List partitions and their operation types |
+| `-h`, `--help` | Show help message |
+
+## How it works
+
+1. Parses the `payload.bin` header (validates `CrAU` magic, reads manifest)
+2. Deserializes the protobuf manifest to get partition metadata
+3. For each partition, reads compressed data, decompresses it, verifies SHA-256 hashes, and writes the output `.img` file
+
+## Limitations
+
+- Only supports **full OTA** payloads. Incremental/delta OTAs (containing `SOURCE_COPY`, `SOURCE_BSDIFF`, `PUFFDIFF`, etc.) are not supported.
+
+## Regenerating protobuf bindings
+
+If you need to update the protobuf bindings after modifying `update_metadata.proto`:
+
+```bash
+uv add --dev grpcio-tools
+uv run python -m grpc_tools.protoc --python_out=. --proto_path=. update_metadata.proto
+```
+
+## License
+
+MIT
