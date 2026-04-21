@@ -1,7 +1,7 @@
 [project]
 name = "android-payload-dumper"
-version = "2.1.0"
-description = "Extract partition images from Android OTA payload.bin files"
+version = "2.2.0"
+description = "Extract partition images from Android OTA payload.bin files — locally, from a URL, or straight from an OTA .zip"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -11,6 +11,7 @@ authors = [
 dependencies = [
     "protobuf>=4.21.0",
     "rich>=13.0.0",
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]

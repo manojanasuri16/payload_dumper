@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional
 
 from . import update_metadata_pb2 as um
+from .source import ByteSource
 
 PAYLOAD_MAGIC = b"CrAU"
 BLOCK_SIZE = 4096
@@ -61,26 +62,31 @@ def _u64(data: bytes) -> int:
     return struct.unpack(">Q", data)[0]
 
 
-def parse_payload(payload_path: str) -> Payload:
-    """Parse the CrAU header; return the manifest and the absolute offset at which
-    the data blobs begin (all op.data_offset values are relative to this)."""
-    with open(payload_path, "rb") as f:
-        magic = f.read(4)
-        if magic != PAYLOAD_MAGIC:
-            raise PayloadError(
-                f"invalid payload magic: expected {PAYLOAD_MAGIC!r}, got {magic!r}"
-            )
+def parse_payload(source: ByteSource) -> Payload:
+    """Parse the CrAU header from a ByteSource; return the manifest and the
+    absolute offset at which the data blobs begin (all op.data_offset values
+    are relative to this)."""
+    magic = source.read_at(0, 4)
+    if magic != PAYLOAD_MAGIC:
+        raise PayloadError(
+            f"invalid payload magic: expected {PAYLOAD_MAGIC!r}, got {magic!r}"
+        )
 
-        version = _u64(f.read(8))
-        if version not in (1, 2):
-            raise PayloadError(f"unsupported payload version: {version}")
+    version = _u64(source.read_at(4, 8))
+    if version not in (1, 2):
+        raise PayloadError(f"unsupported payload version: {version}")
 
-        manifest_size = _u64(f.read(8))
-        metadata_sig_size = _u32(f.read(4)) if version > 1 else 0
+    manifest_size = _u64(source.read_at(12, 8))
 
-        manifest_bytes = f.read(manifest_size)
-        f.read(metadata_sig_size)
-        data_offset = f.tell()
+    header_tail = 20
+    if version > 1:
+        metadata_sig_size = _u32(source.read_at(20, 4))
+        header_tail = 24
+    else:
+        metadata_sig_size = 0
+
+    manifest_bytes = source.read_at(header_tail, manifest_size)
+    data_offset = header_tail + manifest_size + metadata_sig_size
 
     dam = um.DeltaArchiveManifest()
     dam.ParseFromString(manifest_bytes)
@@ -119,7 +125,7 @@ def _decompress(data: bytes, op_type: int) -> bytes:
 
 
 def extract_partition(
-    payload_path: str,
+    source: ByteSource,
     data_offset: int,
     part,
     output_dir: str,
@@ -127,21 +133,20 @@ def extract_partition(
 ) -> str:
     """Extract one partition to `<output_dir>/<name>.img` and return the path.
 
-    Each call opens its own file handle, so this is safe to invoke from parallel
-    worker threads. `on_progress(n)` is called after each operation completes,
-    where n is the number of operations finished in this call (always 1).
+    The `source` must be thread-safe for concurrent `read_at` calls — all of
+    FileSource, HttpSource, and ZipMemberSource are. `on_progress(n)` is
+    invoked once per completed operation.
     """
     out_path = os.path.join(output_dir, f"{part.partition_name}.img")
     digest = hashlib.sha256()
 
-    with open(payload_path, "rb") as payload_file, open(out_path, "wb") as out_file:
+    with open(out_path, "wb") as out_file:
         for op in part.operations:
             if op.type in (OP_ZERO, OP_DISCARD):
                 total = sum(ext.num_blocks for ext in op.dst_extents) * BLOCK_SIZE
                 data = b"\x00" * total
             else:
-                payload_file.seek(data_offset + op.data_offset)
-                raw = payload_file.read(op.data_length)
+                raw = source.read_at(data_offset + op.data_offset, op.data_length)
                 if (
                     op.data_sha256_hash
                     and hashlib.sha256(raw).digest() != op.data_sha256_hash

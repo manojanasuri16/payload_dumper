@@ -1,8 +1,14 @@
 # android-payload-dumper
 
-A Python tool to extract partition images (`.img`) from Android OTA firmware `payload.bin` files.
+A Python tool to extract partition images (`.img`) from Android OTA firmware `payload.bin` files — locally, **from a URL without a full download**, or straight from an OTA `.zip` without unpacking it first.
 
-Android OTA updates ship as a `payload.bin` file inside the firmware ZIP. This file contains compressed partition images (system, boot, vendor, etc.) packed in Google's Chrome OS update format (`CrAU`). This tool parses the payload, decompresses each partition **in parallel**, verifies integrity via SHA-256 hashes, and writes individual `.img` files that can be flashed or mounted.
+Android OTA updates ship as a `payload.bin` inside a firmware ZIP. That file contains compressed partition images (system, boot, vendor, etc.) packed in Google's Chrome OS update format (`CrAU`). This tool parses the payload, decompresses each partition **in parallel**, verifies integrity via SHA-256 hashes, and writes individual `.img` files that can be flashed or mounted.
+
+**Highlights:**
+- **Stream from a URL** with HTTP range requests — extract `boot.img` out of a 4 GB OTA without downloading the whole thing.
+- **Read straight from OTA `.zip`** — no `unzip` step required; operates on the stored `payload.bin` member in place.
+- **Parallel extraction** across partitions with a live per-partition progress UI.
+- **`--json` output** for scripting and CI integration.
 
 ## Prerequisites
 
@@ -62,10 +68,14 @@ Useful if you want the latest `main` without waiting for a PyPI release.
 ### Extract all partitions
 
 ```bash
-payload-dumper payload.bin
+payload-dumper payload.bin             # local payload.bin
+payload-dumper firmware_ota.zip        # reads payload.bin out of the OTA zip
+payload-dumper https://dl.example.com/device-ota.zip   # streams from URL
 ```
 
 All `.img` files are saved to the `output/` directory. Partitions are extracted in parallel (up to 8 workers by default), with a live progress bar per partition and an overall total.
+
+For URLs, the server must support HTTP range requests (nearly every OEM mirror and CDN does) — only the exact bytes needed per operation are fetched, so extracting just `boot.img` from a 4 GB remote OTA downloads on the order of 100 MB.
 
 ### Extract specific partitions only
 
@@ -90,6 +100,7 @@ payload-dumper payload.bin -j 1     # serial extraction
 
 ```bash
 payload-dumper payload.bin -l
+payload-dumper payload.bin -l --json    # machine-readable output for scripts/CI
 ```
 
 Example output:
@@ -113,15 +124,16 @@ payload  minor_version=0  block_size=4096  partitions=35
 ## Command Reference
 
 ```
-payload-dumper [-h] [-o OUTPUT] [-p NAME ...] [-l] [-j WORKERS] [-V] payload
+payload-dumper [-h] [-o OUTPUT] [-p NAME ...] [-l] [--json] [-j WORKERS] [-V] payload
 ```
 
 | Option | Description |
 |---|---|
-| `payload` | Path to the `payload.bin` file (required) |
+| `payload` | Path or URL to `payload.bin` or an OTA `.zip` containing it (required) |
 | `-o`, `--output DIR` | Output directory for extracted images (default: `output/`) |
 | `-p`, `--partitions NAME [NAME ...]` | Extract only the listed partitions |
 | `-l`, `--list` | List all partitions in the payload and exit |
+| `--json` | With `--list`, emit JSON to stdout instead of a table |
 | `-j`, `--workers N` | Parallel extraction workers (default: `min(8, cpu_count)`) |
 | `-V`, `--version` | Print version and exit |
 | `-h`, `--help` | Show help message |
