@@ -2,7 +2,7 @@
 
 A Python tool to extract partition images (`.img`) from Android OTA firmware `payload.bin` files.
 
-Android OTA updates ship as a `payload.bin` file inside the firmware ZIP. This file contains compressed partition images (system, boot, vendor, etc.) packed in Google's Chrome OS update format (`CrAU`). This tool parses the payload, decompresses each partition, verifies integrity via SHA-256 hashes, and writes individual `.img` files that can be flashed or mounted.
+Android OTA updates ship as a `payload.bin` file inside the firmware ZIP. This file contains compressed partition images (system, boot, vendor, etc.) packed in Google's Chrome OS update format (`CrAU`). This tool parses the payload, decompresses each partition **in parallel**, verifies integrity via SHA-256 hashes, and writes individual `.img` files that can be flashed or mounted.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ uv sync
 ```bash
 git clone https://github.com/manojanasuri16/payload_dumper.git
 cd payload_dumper
-pip install protobuf brotli
+pip install -e .
 ```
 </details>
 
@@ -38,49 +38,58 @@ pip install protobuf brotli
 ### Extract all partitions
 
 ```bash
-uv run python payload_dumper.py payload.bin
+uv run payload-dumper payload.bin
 ```
 
-All `.img` files will be saved to the `output/` directory.
+All `.img` files are saved to the `output/` directory. Partitions are extracted in parallel (up to 8 workers by default), with a live progress bar per partition and an overall total.
 
 ### Extract specific partitions only
 
 ```bash
-uv run python payload_dumper.py payload.bin -p boot system vendor
+uv run payload-dumper payload.bin -p boot system vendor
 ```
 
 ### Custom output directory
 
 ```bash
-uv run python payload_dumper.py payload.bin -o extracted/
+uv run payload-dumper payload.bin -o extracted/
+```
+
+### Control parallelism
+
+```bash
+uv run payload-dumper payload.bin -j 4     # 4 workers
+uv run payload-dumper payload.bin -j 1     # serial extraction
 ```
 
 ### List partitions without extracting
 
 ```bash
-uv run python payload_dumper.py payload.bin -l
+uv run payload-dumper payload.bin -l
 ```
 
 Example output:
 
 ```
-Payload version: 0, block size: 4096, partitions: 35
-Partition                       Operations  Types
-----------------------------------------------------------------------
-  boot                                  85  REPLACE_XZ
-  dtbo                                  12  REPLACE_XZ
-  modem                                 86  REPLACE_XZ
-  system                               384  REPLACE_XZ, ZERO
-  vendor                               205  REPLACE_XZ
-  ...
+payload  minor_version=0  block_size=4096  partitions=35
 
-Total: 35 partitions
+  35 partitions
+  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━┳━━━━━━━━━━━━━━━━━━━┓
+  ┃ Partition                  ┃ Ops ┃ Types             ┃
+  ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━╇━━━━━━━━━━━━━━━━━━━┩
+  │ boot                       │  85 │ REPLACE_XZ        │
+  │ dtbo                       │  12 │ REPLACE_XZ        │
+  │ modem                      │  86 │ REPLACE_XZ        │
+  │ system                     │ 384 │ REPLACE_XZ, ZERO  │
+  │ vendor                     │ 205 │ REPLACE_XZ        │
+  │ …                          │   … │ …                 │
+  └────────────────────────────┴─────┴───────────────────┘
 ```
 
 ## Command Reference
 
 ```
-payload_dumper.py [-h] [-o OUTPUT] [-p PARTITIONS ...] [-l] payload
+payload-dumper [-h] [-o OUTPUT] [-p NAME ...] [-l] [-j WORKERS] [-V] payload
 ```
 
 | Option | Description |
@@ -89,7 +98,11 @@ payload_dumper.py [-h] [-o OUTPUT] [-p PARTITIONS ...] [-l] payload
 | `-o`, `--output DIR` | Output directory for extracted images (default: `output/`) |
 | `-p`, `--partitions NAME [NAME ...]` | Extract only the listed partitions |
 | `-l`, `--list` | List all partitions in the payload and exit |
+| `-j`, `--workers N` | Parallel extraction workers (default: `min(8, cpu_count)`) |
+| `-V`, `--version` | Print version and exit |
 | `-h`, `--help` | Show help message |
+
+Also runnable as a module: `uv run python -m payload_dumper payload.bin`.
 
 ## Supported Compression Formats
 
@@ -105,22 +118,22 @@ payload_dumper.py [-h] [-o OUTPUT] [-p PARTITIONS ...] [-l] payload
 
 1. **Header parsing** — Reads and validates the `CrAU` magic bytes, payload format version (v1/v2), manifest size, and metadata signature
 2. **Manifest deserialization** — Uses Protocol Buffers to decode the `DeltaArchiveManifest`, which describes all partitions, their operations, and hash info
-3. **Operation validation** — Checks that all operations are supported (full OTA only — no delta/incremental ops like `SOURCE_COPY` or `BSDIFF`)
-4. **Extraction** — For each partition, iterates over its operations, reads the compressed data from the payload, decompresses it, and writes the result to `<partition_name>.img`
-5. **Integrity verification** — Each operation's data is verified against its SHA-256 hash, and the final partition image is verified against the expected partition hash
+3. **Operation validation** — Checks that all operations are supported up-front (full OTA only — no delta/incremental ops like `SOURCE_COPY` or `BSDIFF`) so a failure doesn't leave half-written images on disk
+4. **Parallel extraction** — Each partition is handed to a worker thread that opens its own file handle, iterates the ops in order, decompresses and writes, and updates a shared Rich progress bar
+5. **Integrity verification** — Each operation's compressed bytes are verified against its SHA-256 hash, and the final partition image is verified against the expected partition hash
 
 ## Payload Binary Format
 
 ```
-+-------------------+
-| Magic: "CrAU"     |  4 bytes
-| Format Version    |  8 bytes (uint64, big-endian)
-| Manifest Size     |  8 bytes (uint64, big-endian)
-| Metadata Sig Size |  4 bytes (uint32, big-endian, v2 only)
-| Manifest (protobuf)|  <manifest_size> bytes
-| Metadata Signature |  <metadata_sig_size> bytes
-| Data Blobs        |  Remaining bytes (compressed partition data)
-+-------------------+
++---------------------+
+| Magic: "CrAU"       |  4 bytes
+| Format Version      |  8 bytes (uint64, big-endian)
+| Manifest Size       |  8 bytes (uint64, big-endian)
+| Metadata Sig Size   |  4 bytes (uint32, big-endian, v2 only)
+| Manifest (protobuf) |  <manifest_size> bytes
+| Metadata Signature  |  <metadata_sig_size> bytes
+| Data Blobs          |  Remaining bytes (compressed partition data)
++---------------------+
 ```
 
 ## Limitations
@@ -130,30 +143,33 @@ payload_dumper.py [-h] [-o OUTPUT] [-p PARTITIONS ...] [-l] payload
 
 ## Troubleshooting
 
-### `ModuleNotFoundError: No module named 'google'`
+### `ModuleNotFoundError: No module named 'google'` or `'rich'`
 
-Install the protobuf package:
+Install the dependencies:
 
 ```bash
 uv sync          # if using uv
-pip install protobuf  # if using pip
+pip install -e . # if using pip
 ```
 
 ### `_lzma.LZMAError: Input format not supported by decoder`
 
 This was a bug in older versions. The current version automatically tries multiple LZMA formats (XZ container, LZMA alone, raw LZMA2) as fallbacks. Make sure you're using the latest version.
 
-### `unsupported op` / `AssertionError`
+### `unsupported op` error
 
 Your payload is an incremental (delta) OTA, not a full OTA. This tool only supports full OTA payloads. Download the full OTA image for your device instead.
 
 ## Regenerating Protobuf Bindings
 
-If you modify `update_metadata.proto`, regenerate the Python bindings:
+If you modify `update_metadata.proto`, regenerate the Python bindings into the package:
 
 ```bash
 uv add --dev grpcio-tools
-uv run python -m grpc_tools.protoc --python_out=. --proto_path=. update_metadata.proto
+uv run python -m grpc_tools.protoc \
+    --python_out=src/payload_dumper \
+    --proto_path=. \
+    update_metadata.proto
 ```
 
 ## License

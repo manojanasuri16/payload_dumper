@@ -1,6 +1,6 @@
 [project]
 name = "payload-dumper"
-version = "2.0.0"
+version = "2.1.0"
 description = "Extract partition images from Android OTA payload.bin files"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -10,18 +10,18 @@ authors = [
 ]
 dependencies = [
     "protobuf>=4.21.0",
-    "brotli>=1.0.9",
+    "rich>=13.0.0",
 ]
 
 [project.scripts]
-payload-dumper = "payload_dumper:main"
+payload-dumper = "payload_dumper.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["src/payload_dumper"]
 
 [dependency-groups]
 dev = [
