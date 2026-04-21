@@ -1,5 +1,5 @@
 [project]
-name = "payload-dumper"
+name = "android-payload-dumper"
 version = "2.1.0"
 description = "Extract partition images from Android OTA payload.bin files"
 readme = "README.md"

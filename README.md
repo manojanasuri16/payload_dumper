@@ -1,4 +1,4 @@
-# payload_dumper
+# android-payload-dumper
 
 A Python tool to extract partition images (`.img`) from Android OTA firmware `payload.bin` files.
 
@@ -7,9 +7,20 @@ Android OTA updates ship as a `payload.bin` file inside the firmware ZIP. This f
 ## Prerequisites
 
 - Python 3.8 or higher
-- [uv](https://docs.astral.sh/uv/) package manager (recommended) or pip
+- One of: [pipx](https://pipx.pypa.io/), [uv](https://docs.astral.sh/uv/), or pip
 
 ## Installation
+
+### As a global CLI (recommended)
+
+```bash
+pipx install android-payload-dumper
+```
+
+This puts `payload-dumper` on your PATH so you can run it from anywhere without activating a venv.
+
+<details>
+<summary>Install from this repo (for development)</summary>
 
 ```bash
 git clone https://github.com/manojanasuri16/payload_dumper.git
@@ -17,14 +28,25 @@ cd payload_dumper
 uv sync
 ```
 
-<details>
-<summary>Using pip instead of uv</summary>
+Then run via `uv run payload-dumper …` (shown in examples below).
+
+Pip alternative:
 
 ```bash
 git clone https://github.com/manojanasuri16/payload_dumper.git
 cd payload_dumper
 pip install -e .
 ```
+</details>
+
+<details>
+<summary>Install straight from GitHub with pipx</summary>
+
+```bash
+pipx install git+https://github.com/manojanasuri16/payload_dumper.git
+```
+
+Useful if you want the latest `main` without waiting for a PyPI release.
 </details>
 
 ## Getting payload.bin
@@ -35,10 +57,12 @@ pip install -e .
 
 ## Usage
 
+> Examples below assume you installed with `pipx` and `payload-dumper` is on your PATH. If you're running from a clone, prefix every command with `uv run` (e.g. `uv run payload-dumper payload.bin`).
+
 ### Extract all partitions
 
 ```bash
-uv run payload-dumper payload.bin
+payload-dumper payload.bin
 ```
 
 All `.img` files are saved to the `output/` directory. Partitions are extracted in parallel (up to 8 workers by default), with a live progress bar per partition and an overall total.
@@ -46,26 +70,26 @@ All `.img` files are saved to the `output/` directory. Partitions are extracted 
 ### Extract specific partitions only
 
 ```bash
-uv run payload-dumper payload.bin -p boot system vendor
+payload-dumper payload.bin -p boot system vendor
 ```
 
 ### Custom output directory
 
 ```bash
-uv run payload-dumper payload.bin -o extracted/
+payload-dumper payload.bin -o extracted/
 ```
 
 ### Control parallelism
 
 ```bash
-uv run payload-dumper payload.bin -j 4     # 4 workers
-uv run payload-dumper payload.bin -j 1     # serial extraction
+payload-dumper payload.bin -j 4     # 4 workers
+payload-dumper payload.bin -j 1     # serial extraction
 ```
 
 ### List partitions without extracting
 
 ```bash
-uv run payload-dumper payload.bin -l
+payload-dumper payload.bin -l
 ```
 
 Example output:
@@ -102,7 +126,7 @@ payload-dumper [-h] [-o OUTPUT] [-p NAME ...] [-l] [-j WORKERS] [-V] payload
 | `-V`, `--version` | Print version and exit |
 | `-h`, `--help` | Show help message |
 
-Also runnable as a module: `uv run python -m payload_dumper payload.bin`.
+Also runnable as a module: `python -m payload_dumper payload.bin`.
 
 ## Supported Compression Formats
 
@@ -145,11 +169,12 @@ Also runnable as a module: `uv run python -m payload_dumper payload.bin`.
 
 ### `ModuleNotFoundError: No module named 'google'` or `'rich'`
 
-Install the dependencies:
+Install (or reinstall) the package so its dependencies come with it:
 
 ```bash
-uv sync          # if using uv
-pip install -e . # if using pip
+pipx install android-payload-dumper   # or: pipx upgrade android-payload-dumper
+uv sync                               # if working from a clone
+pip install -e .                      # pip-from-clone alternative
 ```
 
 ### `_lzma.LZMAError: Input format not supported by decoder`
