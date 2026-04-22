@@ -3,7 +3,7 @@ name = "android-payload-dumper"
 version = "2.2.0"
 description = "Extract partition images from Android OTA payload.bin files — locally, from a URL, or straight from an OTA .zip"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
     { name = "Manoj Anasuri", email = "manojanasuri16@gmail.com" },
@@ -27,4 +27,9 @@ packages = ["src/payload_dumper"]
 [dependency-groups]
 dev = [
     "grpcio-tools>=1.70.0",
+    "pytest>=8.0.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
