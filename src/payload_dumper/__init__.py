@@ -5,6 +5,7 @@ from .core import (
     PayloadError,
     UnsupportedPayloadError,
     extract_partition,
+    extract_partition_to_stream,
     parse_payload,
     validate_operations,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "UnsupportedPayloadError",
     "ZipMemberSource",
     "extract_partition",
+    "extract_partition_to_stream",
     "open_source",
     "parse_payload",
     "validate_operations",

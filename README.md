@@ -8,6 +8,7 @@ Android OTA updates ship as a `payload.bin` inside a firmware ZIP. That file con
 - **Stream from a URL** with HTTP range requests — extract `boot.img` out of a 4 GB OTA without downloading the whole thing.
 - **Read straight from OTA `.zip`** — no `unzip` step required; operates on the stored `payload.bin` member in place.
 - **Parallel extraction** across partitions with a live per-partition progress UI.
+- **Pipe to stdout** with `-o -` for composition with `simg2img`, `fastboot`, and other tools.
 - **`--json` output** for scripting and CI integration.
 
 ## Prerequisites
@@ -89,6 +90,18 @@ payload-dumper payload.bin -p boot system vendor
 payload-dumper payload.bin -o extracted/
 ```
 
+### Stream a single partition to stdout
+
+Use `-o -` to pipe one partition's image into another tool without touching disk. Requires exactly one partition via `-p`; progress and banners go to stderr so stdout stays pure image bytes.
+
+```bash
+# Flash boot directly from a remote OTA
+payload-dumper https://dl.example.com/ota.zip -p boot -o - | fastboot flash boot -
+
+# Convert a sparse system image on the fly
+payload-dumper payload.bin -p system -o - | simg2img - system.raw
+```
+
 ### Control parallelism
 
 ```bash
@@ -130,7 +143,7 @@ payload-dumper [-h] [-o OUTPUT] [-p NAME ...] [-l] [--json] [-j WORKERS] [-V] pa
 | Option | Description |
 |---|---|
 | `payload` | Path or URL to `payload.bin` or an OTA `.zip` containing it (required) |
-| `-o`, `--output DIR` | Output directory for extracted images (default: `output/`) |
+| `-o`, `--output DIR` | Output directory for extracted images (default: `output/`). Use `-` to stream a single partition to stdout (requires `-p NAME`). |
 | `-p`, `--partitions NAME [NAME ...]` | Extract only the listed partitions |
 | `-l`, `--list` | List all partitions in the payload and exit |
 | `--json` | With `--list`, emit JSON to stdout instead of a table |
