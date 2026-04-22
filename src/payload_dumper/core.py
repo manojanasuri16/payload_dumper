@@ -6,7 +6,7 @@ import lzma
 import os
 import struct
 from dataclasses import dataclass
-from typing import Callable, Iterable, List, Optional
+from typing import BinaryIO, Callable, Iterable, List, Optional
 
 from . import update_metadata_pb2 as um
 from .source import ByteSource
@@ -124,6 +124,44 @@ def _decompress(data: bytes, op_type: int) -> bytes:
     raise ValueError(f"cannot decompress op: {OP_NAMES.get(op_type, op_type)}")
 
 
+def extract_partition_to_stream(
+    source: ByteSource,
+    data_offset: int,
+    part,
+    stream: BinaryIO,
+    on_progress: Optional[Callable[[int], None]] = None,
+) -> None:
+    """Decompress `part` into `stream`, op by op, hashing as we go.
+
+    The stream is written sequentially — it only needs `.write(bytes)`, not
+    seek/tell — so callers can pass a file, `sys.stdout.buffer`, or a pipe.
+    Raises `PayloadError` on hash mismatch (per-op or final image)."""
+    digest = hashlib.sha256()
+    for op in part.operations:
+        if op.type in (OP_ZERO, OP_DISCARD):
+            total = sum(ext.num_blocks for ext in op.dst_extents) * BLOCK_SIZE
+            data = b"\x00" * total
+        else:
+            raw = source.read_at(data_offset + op.data_offset, op.data_length)
+            if (
+                op.data_sha256_hash
+                and hashlib.sha256(raw).digest() != op.data_sha256_hash
+            ):
+                raise PayloadError(
+                    f"{part.partition_name}: operation data hash mismatch"
+                )
+            data = _decompress(raw, op.type)
+
+        digest.update(data)
+        stream.write(data)
+        if on_progress is not None:
+            on_progress(1)
+
+    expected = part.new_partition_info.hash
+    if expected and digest.digest() != expected:
+        raise PayloadError(f"{part.partition_name}: final image hash mismatch")
+
+
 def extract_partition(
     source: ByteSource,
     data_offset: int,
@@ -138,32 +176,8 @@ def extract_partition(
     invoked once per completed operation.
     """
     out_path = os.path.join(output_dir, f"{part.partition_name}.img")
-    digest = hashlib.sha256()
-
     with open(out_path, "wb") as out_file:
-        for op in part.operations:
-            if op.type in (OP_ZERO, OP_DISCARD):
-                total = sum(ext.num_blocks for ext in op.dst_extents) * BLOCK_SIZE
-                data = b"\x00" * total
-            else:
-                raw = source.read_at(data_offset + op.data_offset, op.data_length)
-                if (
-                    op.data_sha256_hash
-                    and hashlib.sha256(raw).digest() != op.data_sha256_hash
-                ):
-                    raise PayloadError(
-                        f"{part.partition_name}: operation data hash mismatch"
-                    )
-                data = _decompress(raw, op.type)
-
-            digest.update(data)
-            out_file.write(data)
-            if on_progress is not None:
-                on_progress(1)
-
-    expected = part.new_partition_info.hash
-    if expected and digest.digest() != expected:
-        raise PayloadError(f"{part.partition_name}: final image hash mismatch")
+        extract_partition_to_stream(source, data_offset, part, out_file, on_progress)
     return out_path
 
 

@@ -22,6 +22,7 @@ from .core import (
     PayloadError,
     UnsupportedPayloadError,
     extract_partition,
+    extract_partition_to_stream,
     parse_payload,
     partition_op_types,
     validate_operations,
@@ -29,6 +30,7 @@ from .core import (
 from .source import ByteSource, SourceError, describe, open_source
 
 console = Console()
+STDOUT_SENTINEL = "-"
 
 
 def _list_partitions_table(manifest) -> None:
@@ -79,14 +81,16 @@ def _humansize(n: int) -> str:
     return f"{n:.1f} PB"
 
 
-def _select_partitions(manifest, requested: Optional[List[str]]):
+def _select_partitions(
+    manifest, requested: Optional[List[str]], msg_console: Optional[Console] = None
+):
     if not requested:
         return list(manifest.partitions)
     wanted = {p.lower() for p in requested}
     selected = [p for p in manifest.partitions if p.partition_name.lower() in wanted]
     missing = wanted - {p.partition_name.lower() for p in selected}
     if missing:
-        console.print(
+        (msg_console or console).print(
             f"[yellow]warning:[/yellow] partitions not found: "
             f"{', '.join(sorted(missing))}"
         )
@@ -112,7 +116,10 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "-o", "--output", default="output",
-        help="output directory (default: output/)",
+        help=(
+            "output directory (default: output/). Use '-' to stream a single "
+            "partition to stdout; requires exactly one partition via -p."
+        ),
     )
     parser.add_argument(
         "-p", "--partitions", nargs="+", metavar="NAME",
@@ -189,20 +196,64 @@ def _extract_all(source, data_offset, partitions, output_dir, workers) -> List[t
     return failures
 
 
+def _extract_one_to_stdout(
+    source, data_offset, part, err_console: Console
+) -> List[tuple]:
+    """Stream a single partition to sys.stdout.buffer, progress on stderr."""
+    failures: List[tuple] = []
+    total_ops = len(part.operations)
+
+    progress = Progress(
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(bar_width=None),
+        MofNCompleteColumn(),
+        TextColumn("ops"),
+        TimeElapsedColumn(),
+        console=err_console,
+        transient=False,
+    )
+
+    with progress:
+        task = progress.add_task(part.partition_name, total=total_ops)
+
+        def advance(n: int) -> None:
+            progress.advance(task, n)
+
+        try:
+            extract_partition_to_stream(
+                source, data_offset, part, sys.stdout.buffer, advance
+            )
+            sys.stdout.buffer.flush()
+        except PayloadError as e:
+            failures.append((part.partition_name, str(e)))
+            err_console.print(f"[red]FAIL[/red] {part.partition_name}: {e}")
+        except Exception as e:
+            failures.append((part.partition_name, repr(e)))
+            err_console.print(f"[red]FAIL[/red] {part.partition_name}: {e!r}")
+
+    return failures
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parse_args(argv)
+    to_stdout = args.output == STDOUT_SENTINEL
+
+    # When streaming image bytes to stdout, every banner/progress/warning must
+    # go to stderr so the pipe stays uncontaminated. Otherwise reuse the
+    # module-global stdout console.
+    msg_console = Console(stderr=True) if to_stdout else console
 
     try:
         source: ByteSource = open_source(args.payload)
     except (SourceError, FileNotFoundError) as e:
-        console.print(f"[red]error:[/red] {e}")
+        msg_console.print(f"[red]error:[/red] {e}")
         return 1
 
     try:
         try:
             payload = parse_payload(source)
         except PayloadError as e:
-            console.print(f"[red]error:[/red] {e}")
+            msg_console.print(f"[red]error:[/red] {e}")
             return 1
 
         manifest = payload.manifest
@@ -211,11 +262,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             _list_partitions_json(manifest)
             return 0
 
-        console.print(
+        msg_console.print(
             f"[bold]source[/bold]  {describe(args.payload)}  "
             f"size={_humansize(source.size())}"
         )
-        console.print(
+        msg_console.print(
             f"[bold]payload[/bold]  minor_version={manifest.minor_version}  "
             f"block_size={manifest.block_size}  partitions={len(manifest.partitions)}"
         )
@@ -224,20 +275,39 @@ def main(argv: Optional[List[str]] = None) -> int:
             _list_partitions_table(manifest)
             return 0
 
-        partitions = _select_partitions(manifest, args.partitions)
+        partitions = _select_partitions(manifest, args.partitions, msg_console)
         if not partitions:
-            console.print("no partitions to extract")
+            msg_console.print("no partitions to extract")
             return 0
 
         try:
             validate_operations(partitions)
         except UnsupportedPayloadError as e:
-            console.print(f"[red]error:[/red] {e}")
+            msg_console.print(f"[red]error:[/red] {e}")
             return 1
+
+        if to_stdout:
+            if len(partitions) != 1:
+                msg_console.print(
+                    "[red]error:[/red] streaming to stdout (-o -) requires "
+                    "exactly one partition via -p NAME"
+                )
+                return 2
+            msg_console.print(
+                f"streaming [bold]{partitions[0].partition_name}[/bold] to stdout\n"
+            )
+            try:
+                failures = _extract_one_to_stdout(
+                    source, payload.data_offset, partitions[0], msg_console
+                )
+            except KeyboardInterrupt:
+                msg_console.print("\n[yellow]interrupted[/yellow]")
+                return 130
+            return 1 if failures else 0
 
         workers = max(1, min(args.workers, len(partitions)))
         os.makedirs(args.output, exist_ok=True)
-        console.print(
+        msg_console.print(
             f"extracting {len(partitions)} partition(s) to "
             f"[bold]{args.output}/[/bold]  workers={workers}\n"
         )
@@ -247,14 +317,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                 source, payload.data_offset, partitions, args.output, workers
             )
         except KeyboardInterrupt:
-            console.print("\n[yellow]interrupted[/yellow]")
+            msg_console.print("\n[yellow]interrupted[/yellow]")
             return 130
 
         if failures:
-            console.print(f"\n[red]{len(failures)} partition(s) failed[/red]")
+            msg_console.print(f"\n[red]{len(failures)} partition(s) failed[/red]")
             return 1
 
-        console.print(
+        msg_console.print(
             f"\n[green]done[/green]  extracted {len(partitions)} partition(s) "
             f"to {args.output}/"
         )
