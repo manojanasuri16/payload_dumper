@@ -12,7 +12,7 @@ Android OTA updates ship as a `payload.bin` inside a firmware ZIP. That file con
 
 ## Prerequisites
 
-- Python 3.8 or higher
+- Python 3.9 or higher
 - One of: [pipx](https://pipx.pypa.io/), [uv](https://docs.astral.sh/uv/), or pip
 
 ## Installation
